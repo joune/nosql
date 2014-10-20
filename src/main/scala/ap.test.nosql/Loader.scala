@@ -33,7 +33,7 @@ trait Loader {
 }
 
 
-import com.mashape.unirest.http.Unirest
+import scalaj.http.Http
 
 class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
   import CouchClient._
@@ -42,7 +42,7 @@ class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
 
   val db = "load-test"
   
-  def init: Unit = println(Unirest.put(s"$couch/$db").asJson.getBody)//clients(0) ! DB(db)
+  def init: Unit = println(Http(s"$couch/$db").method("PUT").asString)
 
 
   def load(docs: Seq[String]) = 
@@ -50,7 +50,7 @@ class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
     // get enough uids in one request for this batch
     //val uids = Unirest.get(s"$couch/_uuids?count=$nb_clients").asJson.getBody.getObject.getJSONArray("uuids")
     (docs zip clients).zipWithIndex map { //round robin dispatch to each client
-      case ((entry, client), index) => client ! Doc(db, entry, "")//uids.get(index).toString)
+      case ((entry, client), index) => client ! Doc(db, entry)//, uids.get(index).toString)
     }
   }
 }
@@ -60,22 +60,20 @@ object CouchClient {
   case object Server
   case object DBs
   case class DB(db:String)
-  case class Doc(db: String, doc: String, uuid: String)
+  case class Doc(db: String, doc: String)//, uuid: String)
 }
 
 class CouchClient extends Actor {
   import CouchClient._
 
   def receive = {
-    case Server => println(Unirest.get(couch).asJson.getBody.getObject.toString(2))
-    case DBs    => println(Unirest.get(s"$couch/_all_dbs").asJson.getBody)
-    case DB(db) => println(Unirest.put(s"$couch/$db").asJson.getBody)
-    case Doc(db, doc, uuid) => 
-      //println(Unirest.post(s"$couch/$db/").body(doc).toString)
-      Unirest.post(s"$couch/$db/")
+    case Server => println(Http(couch).asString)
+    case DBs    => println(Http(s"$couch/_all_dbs").asString)
+    case DB(db) => println(Http(s"$couch/$db").method("PUT").asString)
+    case Doc(db, doc) => 
+      Http.postData(s"$couch/$db/", doc)
         .header("Content-Type", "application/json")
-        .body(doc).asJson.getBody//println()
-      //Unirest.put(s"$couch/$db/$uuid").body(doc).asJson.getBody//println()
+        .responseCode
   }
 }
 
