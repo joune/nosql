@@ -33,16 +33,67 @@ trait Loader {
 }
 
 
-import com.mashape.unirest.http.Unirest
+import java.net._
+import java.io._
+import scala.util.Try
 
-class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
+trait HttpClient {
+  // mutable buffer is used sequentially with each actor
+  private val buf = new Array[Byte](4096)
+
+  def get(uri: String) = runHttp(openConnection(uri))
+
+  def put(uri: String) = {
+    val cnx = openConnection(uri)
+    cnx.setRequestMethod("PUT")
+    runHttp(cnx)
+  }
+
+  def post(uri: String, json: String) = {
+    val cnx = openConnection(uri)
+    cnx.setRequestMethod("POST")
+    cnx.setDoOutput(true)
+    cnx.setRequestProperty("Content-Type", "application/json")
+    val out = new OutputStreamWriter(cnx.getOutputStream)
+    out.write(json, 0, json.length)
+    out.close
+    runHttp(cnx)
+  }
+
+  private def openConnection(uri: String) = new URL(uri).openConnection.asInstanceOf[HttpURLConnection]
+
+  private def runHttp(cnx: HttpURLConnection) = Try {
+    val in = cnx.getInputStream
+    while (in.read(buf) > 0) {
+      // drop!
+    }
+    in.close
+  } recover {
+    case x: IOException => {
+      println(cnx.getResponseCode)
+      val es = cnx.getErrorStream
+      while (es.read(buf) > 0) {
+        // drop!
+      }
+      es.close
+    }
+  } recover {
+    case e => new Exception(cnx.getURL.toString, e).printStackTrace
+  }
+}
+
+
+
+
+
+class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader with HttpClient {
   import CouchClient._
 
   val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
 
   val db = "load-test"
   
-  def init: Unit = println(Unirest.put(s"$couch/$db").asJson.getBody)//clients(0) ! DB(db)
+  def init: Unit = println(put(s"$couch/$db"))
 
 
   def load(docs: Seq[String]) = 
@@ -63,19 +114,14 @@ object CouchClient {
   case class Doc(db: String, doc: String, uuid: String)
 }
 
-class CouchClient extends Actor {
+class CouchClient extends Actor with HttpClient {
   import CouchClient._
 
   def receive = {
-    case Server => println(Unirest.get(couch).asJson.getBody.getObject.toString(2))
-    case DBs    => println(Unirest.get(s"$couch/_all_dbs").asJson.getBody)
-    case DB(db) => println(Unirest.put(s"$couch/$db").asJson.getBody)
-    case Doc(db, doc, uuid) => 
-      //println(Unirest.post(s"$couch/$db/").body(doc).toString)
-      Unirest.post(s"$couch/$db/")
-        .header("Content-Type", "application/json")
-        .body(doc).asJson.getBody//println()
-      //Unirest.put(s"$couch/$db/$uuid").body(doc).asJson.getBody//println()
+    case Server => println(get(couch))
+    case DBs    => println(get(s"$couch/_all_dbs"))
+    case DB(db) => println(put(s"$couch/$db"))
+    case Doc(db, doc, uuid) => post(s"$couch/$db/", doc)
   }
 }
 
