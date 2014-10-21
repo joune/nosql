@@ -1,26 +1,27 @@
 package ap.test.nosql
 
 import akka.actor._
+import scala.concurrent.Future
 
 object Main extends App {
 
-  val akka = ActorSystem("loader")
+  implicit val akka = ActorSystem("loader")
 
   val nb_clients = args(0).toInt
   args(1) match {
-    case "couch" => new CouchLoader(akka, nb_clients).run
-    case "mongo" => new MongoLoader(akka, nb_clients).run
+    case "couch" => new CouchLoader(nb_clients).run
+    case "mongo" => new MongoLoader(nb_clients).run
   }
 }
 
 trait Loader {
   def nb_clients: Int
   def clients: List[ActorRef]
-  def init: Unit
+  def init: Future[_]
   def load(docs: Seq[String]): Unit
 
-  def run = {
-    init
+  import scala.concurrent.ExecutionContext.Implicits.global
+  def run = init map { _ => 
     io.Source
       // sample file available from https://github.com/zemirco/sf-city-lots-json/blob/master/citylots.json
       .fromFile("/tmp/sf-city-lots-json/citylots.json") 
@@ -33,50 +34,48 @@ trait Loader {
 }
 
 
-import spray.io._
+import spray.http.{ HttpRequest, HttpResponse }
+import spray.client.pipelining._ //{ Get, Put, Post, sendReceive, addHeader }
+import spray.httpx.SprayJsonSupport
+import spray.json.AdditionalFormats
 
-class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
+import akka.util.Timeout
+import scala.concurrent.duration._
+
+class CouchLoader(val nb_clients:Int)(implicit akka: ActorSystem) extends Loader {
   import CouchClient._
+  import akka.dispatcher // execution context for futures
+
+  val pipeline: HttpRequest => Future[HttpResponse] = sendReceive
 
   val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
 
-  //spray stuff.. 
-  IO(Http) ! Http.HostConnectorSetup("www.spray.io", port = 80)
-
   val db = "load-test"
   
-  def init: Unit = println(Http(s"$couch/$db").method("PUT").asString)
+  def init = pipeline(Put(s"$couch/$db"))
 
 
-  def load(docs: Seq[String]) = 
-  {
-    // get enough uids in one request for this batch
-    //val uids = Unirest.get(s"$couch/_uuids?count=$nb_clients").asJson.getBody.getObject.getJSONArray("uuids")
-    (docs zip clients).zipWithIndex map { //round robin dispatch to each client
-      case ((entry, client), index) => client ! Doc(db, entry)//, uids.get(index).toString)
-    }
+  def load(docs: Seq[String]) = (docs zip clients) map { //round robin dispatch to each client
+    case (entry, client) => client ! Doc(db, entry)
   }
 }
 
 object CouchClient {
   val couch = "http://localhost:49153"
-  case object Server
-  case object DBs
-  case class DB(db:String)
+  
+  implicit val timeout: Timeout = 10 seconds
+
   case class Doc(db: String, doc: String)//, uuid: String)
 }
 
 class CouchClient extends Actor {
   import CouchClient._
+  import context.dispatcher // execution context for futures
+
+  val pipeline: HttpRequest => Future[HttpResponse] = sendReceive
 
   def receive = {
-    case Server => println(Http(couch).asString)
-    case DBs    => println(Http(s"$couch/_all_dbs").asString)
-    case DB(db) => println(Http(s"$couch/$db").method("PUT").asString)
-    case Doc(db, doc) => 
-      Http.postData(s"$couch/$db/", doc)
-        .header("Content-Type", "application/json")
-        .responseCode
+    case Doc(db, doc) => pipeline(Post(s"$couch/$db/", doc.asJson.asObject))
   }
 }
 
@@ -84,12 +83,13 @@ class CouchClient extends Actor {
 import com.mongodb._
 import com.mongodb.util.JSON
 
-class MongoLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
+class MongoLoader(val nb_clients:Int)(implicit akka: ActorSystem) extends Loader {
   import MongoDBClient._
 
   val clients = List.fill(nb_clients)(akka.actorOf(Props[MongoDBClient]))
 
-  def init: Unit = {}
+  import scala.concurrent.ExecutionContext.Implicits.global
+  def init = Future{}
 
   def load(docs: Seq[String]) = (docs zip clients) map {
     case (doc, client) => client ! Doc(doc)
