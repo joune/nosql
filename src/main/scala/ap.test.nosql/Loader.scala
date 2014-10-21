@@ -33,12 +33,15 @@ trait Loader {
 }
 
 
-import scalaj.http.Http
+import spray.io._
 
 class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
   import CouchClient._
 
   val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
+
+  //spray stuff.. 
+  IO(Http) ! Http.HostConnectorSetup("www.spray.io", port = 80)
 
   val db = "load-test"
   
