@@ -19,7 +19,7 @@ ext {
 configurations {
   scala
   akka
-  scalajhttp
+  rapture
   mongo
 }
 
@@ -29,11 +29,11 @@ dependencies {
   akka  "com.typesafe.akka:akka-actor_$scalaMajorVersion:$akkaVersion",
         'com.typesafe:config:1.2.0'
 
-  scalajhttp "org.scalaj:scalaj-http_$scalaMajorVersion:0.3.16"
+  rapture "com.propensive:rapture-net_$scalaMajorVersion:0.10.0"
 
   mongo 'org.mongodb:mongo-java-driver:2.12.3'
 
-  compile configurations.scala, configurations.akka, configurations.scalajhttp, configurations.mongo
+  compile configurations.scala, configurations.akka, configurations.rapture, configurations.mongo
 } 
 
 task cp << {

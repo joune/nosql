@@ -33,7 +33,10 @@ trait Loader {
 }
 
 
-import scalaj.http.Http
+import rapture._
+import core._, io._, net._, uri._, codec._
+import encodings.`UTF-8`
+import modes.throwExceptions
 
 class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
   import CouchClient._
@@ -41,8 +44,8 @@ class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
   val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
 
   val db = "load-test"
-  
-  def init: Unit = println(Http(s"$couch/$db").method("PUT").asString)
+
+  def init: Unit = println((couch / db).put(None))
 
 
   def load(docs: Seq[String]) = 
@@ -56,7 +59,9 @@ class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
 }
 
 object CouchClient {
-  val couch = "http://localhost:49153"
+  val couch = Http / "localhost:49153" / ""
+  implicit val ts = timeSystems.numeric
+  
   case object Server
   case object DBs
   case class DB(db:String)
@@ -67,13 +72,16 @@ class CouchClient extends Actor {
   import CouchClient._
 
   def receive = {
-    case Server => println(Http(couch).asString)
-    case DBs    => println(Http(s"$couch/_all_dbs").asString)
-    case DB(db) => println(Http(s"$couch/$db").method("PUT").asString)
+    case Server => println(couch.slurp[Char])
+    case DBs    => println((couch / "_all_dbs").slurp[Char])
+    case DB(db) => println((couch / db).put(None))
     case Doc(db, doc) => 
-      Http.postData(s"$couch/$db/", doc)
-        .header("Content-Type", "application/json")
-        .responseCode
+      (couch / db).post(
+        content = doc, 
+        timeout = null, 
+        authenticate = None, 
+        ignoreInvalidCertificates = false, 
+        httpHeaders = Map("Content-Type" -> "application/json"))
   }
 }
 
