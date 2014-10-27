@@ -70,7 +70,7 @@ class CouchClient extends Actor {
     case Server => println(get(couch).asString)
     case DBs    => println(get(s"$couch/_all_dbs").asString)
     case DB(db) => println(put(s"$couch/$db").asString)
-    case Doc(db, doc, uuid) => postData(s"$couch/$db/", doc).header("Content-Type", "application/json").asString
+    case Doc(db, doc, uuid) => postData(s"$couch/$db/", doc).header("Content-Type", "application/json").responseCode
   }
 }
 

@@ -14,7 +14,7 @@ object Http {
   type HttpUrl = Request => URL
   
   case class Request(method: String, url: HttpUrl, exec: HttpExec, params: List[(String,String)] = Nil, 
-      headers: List[(String,String)] = Nil, charset: String = Http.utf8, sendBufferSize: Int = 4096) {
+      headers: List[(String,String)] = Nil, charset: String = Http.utf8) {
 
     def headers(h: (String,String)*):Request = headers(h.toList)
     def headers(h: Map[String, String]):Request = headers(h.toList)
@@ -51,6 +51,21 @@ object Http {
     }
     
     def asString: String = apply(readString(_, charset))
+
+    def responseCode: Int = process{(conn:HttpURLConnection) =>
+      closeStreams(conn)
+      conn.getResponseCode
+    }
+
+    private def closeStreams(conn:HttpURLConnection) {
+      try { conn.getInputStream().close } catch {
+        case e: Exception => //ignore
+      }
+      try { conn.getErrorStream().close } catch {
+        case e: Exception => //ignore
+      }
+    }
+
   }
 
   def tryParse[E](is: InputStream, parser: InputStream => E): E = try {
