@@ -40,12 +40,13 @@ import modes.throwExceptions
 
 class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
   import CouchClient._
+  import timeSystems.numeric
 
   val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
 
   val db = "load-test"
 
-  def init: Unit = println((couch / db).put(None))
+  def init: Unit = println((couch / db).put(None, clientTimeout))
 
 
   def load(docs: Seq[String]) = 
@@ -60,7 +61,7 @@ class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
 
 object CouchClient {
   val couch = Http / "localhost:49153" / ""
-  implicit val ts = timeSystems.numeric
+  val clientTimeout = 10000L
   
   case object Server
   case object DBs
@@ -70,15 +71,16 @@ object CouchClient {
 
 class CouchClient extends Actor {
   import CouchClient._
+  import timeSystems.numeric
 
   def receive = {
     case Server => println(couch.slurp[Char])
     case DBs    => println((couch / "_all_dbs").slurp[Char])
-    case DB(db) => println((couch / db).put(None))
+    case DB(db) => println((couch / db).put(None, clientTimeout))
     case Doc(db, doc) => 
       (couch / db).post(
         content = doc, 
-        timeout = null, 
+        timeout = clientTimeout, 
         authenticate = None, 
         ignoreInvalidCertificates = false, 
         httpHeaders = Map("Content-Type" -> "application/json"))
