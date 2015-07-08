@@ -117,15 +117,13 @@ class ESLoader extends Actor with Logger
 object MongoClient
 {
   import com.mongodb.MongoClient
-  import com.mongodb.MongoCredential
   import com.mongodb.ServerAddress
   import org.jongo.Jongo
 
   val client = new Jongo(
     new MongoClient(
-      List(new ServerAddress("localhost")),
-      List(MongoCredential.createMongoCRCredential("hub", "hub", "hub".toArray))
-  ).getDB("hub")).getCollection("test")
+      List(new ServerAddress("localhost"))
+    ).getDB("test")).getCollection("test")
 }
 class MongoLoader extends Actor with Logger
 {
