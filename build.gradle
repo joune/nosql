@@ -1,48 +1,46 @@
 apply plugin: 'scala'
 
-compileJava.enabled = false
+ext {
+  scalaMajorVersion = '2.11'
+  scalaVersion = scalaMajorVersion+'.6'
+  akkaVersion = '2.3.11'
+  configVersion = '1.3.0'
+  ESVersion = '1.6.0'
+  LuceneVersion = '4.10.4'
+}
 
 repositories {
   mavenLocal()
-  maven { url 'http://repo.typesafe.com/typesafe/releases/' }
-  maven { url 'https://oss.sonatype.org/content/groups/scala-tools/' }
   mavenCentral()
 }
 
-ext {
-  scalaMajorVersion = '2.10'
-  scalaVersion = "$scalaMajorVersion.3"
-
-  akkaVersion = '2.3.0'
-}
-
 configurations {
-  scala
-  akka
-  unirest
+  elasticsearch
   mongo
 }
 
 dependencies {
-  scala "org.scala-lang:scala-library:$scalaVersion"
+  compile "org.scala-lang:scala-library:$scalaVersion",
+          "com.typesafe.akka:akka-actor_$scalaMajorVersion:$akkaVersion",
+          "com.typesafe.akka:akka-slf4j_$scalaMajorVersion:$akkaVersion",
+          "com.typesafe:config:$configVersion",
+          configurations.elasticsearch,
+          configurations.mongo
 
-  akka  "com.typesafe.akka:akka-actor_$scalaMajorVersion:$akkaVersion",
-        'com.typesafe:config:1.2.0'
+  elasticsearch "org.elasticsearch:elasticsearch:$ESVersion",
+                "org.apache.lucene:lucene-core:$LuceneVersion"
 
-  unirest "com.mashape.unirest:unirest-java:1.3.20",
-          "org.apache.httpcomponents:httpclient:4.3.4",
-          "org.apache.httpcomponents:httpasyncclient:4.0.1",
-          "org.apache.httpcomponents:httpmime:4.3.4",
-          "org.json:json:20140107"
-
-  mongo 'org.mongodb:mongo-java-driver:2.12.3'
-
-  compile configurations.scala, configurations.akka, configurations.unirest, configurations.mongo
+  mongo 'org.mongodb:mongo-java-driver:2.12.5',
+        'org.jongo:jongo:1.1',
+        'de.undercouch:bson4jackson:2.4.0'
+              
 } 
 
-task cp << {
-  println configurations.compile.asPath
+task run(type: JavaExec, dependsOn: 'build') {
+  classpath configurations.compile, "$buildDir/classes/main"
+  main 'ap.loader.akka.Main'
+  systemProperty 'nbPar', project.hasProperty('nbPar') ? project.getProperty('nbPar') : '1'
+  systemProperty 'nbMsg', project.hasProperty('nbMsg') ? project.getProperty('nbMsg') : '1'
+  systemProperty 'payloadSize', project.hasProperty('payloadSize') ? project.getProperty('payloadSize') : '1'
 }
-
-
 

@@ -1,112 +1,144 @@
-package ap.test.nosql
+package ap.loader.akka
 
 import akka.actor._
+import akka.util._
+import akka.pattern.ask
+import akka.routing.SmallestMailboxPool
 
-object Main extends App {
+import concurrent.Future
+import concurrent.duration._
+import util._
+import collection.JavaConversions._
 
-  val akka = ActorSystem("loader")
-
-  val nb_clients = args(0).toInt
-  args(1) match {
-    case "couch" => new CouchLoader(akka, nb_clients).run
-    case "mongo" => new MongoLoader(akka, nb_clients).run
-  }
+object Loader
+{
+  case class Doc(id:Int, s:String)
 }
+import Loader._
 
-trait Loader {
-  def nb_clients: Int
-  def clients: List[ActorRef]
-  def init: Unit
-  def load(docs: Seq[String]): Unit
+object Main extends App
+{
+  val nbPar = Option(System.getProperty("nbPar")).getOrElse("1").toInt
+  val nbMsg = Option(System.getProperty("nbMsg")).getOrElse("1").toInt
+  val payloadSize = Option(System.getProperty("payloadSize")).getOrElse("1").toInt
+  val payload = "a"*payloadSize
 
-  def run = {
-    init
-    io.Source
-      // sample file available from https://github.com/zemirco/sf-city-lots-json/blob/master/citylots.json
-      .fromFile("/tmp/sf-city-lots-json/citylots.json") 
-      .getLines//.toStream
-      .drop(3) //drop the wrapper json
-      .filter(line => !(line.size < 2)) // and intermediate commas.. 
-      .grouped(nb_clients) // mk groups of size nb_clients
-      .foreach(load(_))
-  }
-}
+  val system = ActorSystem("loader")
+  val loader = system.actorOf(Props[ESLoader]
+                      .withRouter(SmallestMailboxPool(nrOfInstances = nbPar)))
 
+  import system.dispatcher
+  implicit val timeout = Timeout(5 minutes) 
 
-import com.mashape.unirest.http.Unirest
-
-class CouchLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
-  import CouchClient._
-
-  val clients = List.fill(nb_clients)(akka.actorOf(Props[CouchClient]))
-
-  val db = "load-test"
-  
-  def init: Unit = println(Unirest.put(s"$couch/$db").asJson.getBody)//clients(0) ! DB(db)
-
-
-  def load(docs: Seq[String]) = 
-  {
-    // get enough uids in one request for this batch
-    //val uids = Unirest.get(s"$couch/_uuids?count=$nb_clients").asJson.getBody.getObject.getJSONArray("uuids")
-    (docs zip clients).zipWithIndex map { //round robin dispatch to each client
-      case ((entry, client), index) => client ! Doc(db, entry, "")//uids.get(index).toString)
+  // launch requests
+  val results:Stream[Future[Try[_]]] = 
+    (1 to nbMsg).toStream map { id =>
+      (loader ? Doc(id, s"""{"i":$id, "d":"$payload"}""")).mapTo[Try[_]]
     }
+
+  // count results
+  Future.fold(results)((0,0)) { case ((fail,succ),res) => res match {
+
+    case Failure(e) => 
+      println(e)
+      (fail +1, succ)
+    
+    case Success(_) => 
+      (fail, succ + 1)
+
+  }} onComplete {
+    case t => t match {
+        case Success((fail,succ)) => println(s"  $fail KO | $succ OK")
+        case Failure(e) => e.printStackTrace(); //ask timeout or something like that
+      }
+      println("Done!"); System.exit(0)
+  }
+
+}
+
+trait Logger
+{
+  def log(id:Int) = 
+    if (id % 100 == 0) print(s"  $id \r")// ${" "*100}\r") else print(".")
+}
+
+
+////////////////////: FakeLoader loads nothing! ://////////////////////////
+
+class FakeLoader extends Actor with Logger
+{
+  def receive = {
+    case Doc(id, doc) => 
+      log(id)//println(s"${self.path}: $id -> $doc")
+      sender ! Try { 
+        Thread.sleep(10)
+        "ok"
+      }
+
+    case x => println(x)
   }
 }
 
-object CouchClient {
-  val couch = "http://localhost:49153"
-  case object Server
-  case object DBs
-  case class DB(db:String)
-  case class Doc(db: String, doc: String, uuid: String)
-}
+////////////////////: Elastic ://////////////////////////
 
-class CouchClient extends Actor {
-  import CouchClient._
+object ESClient
+{
+  import org.elasticsearch.client.Client
+  import org.elasticsearch.common.settings.ImmutableSettings
+  import org.elasticsearch.client.transport.TransportClient
+  import org.elasticsearch.common.transport.InetSocketTransportAddress
+
+  val client = new TransportClient
+  client.addTransportAddress(new InetSocketTransportAddress("localhost", 9300));
+}
+class ESLoader extends Actor with Logger
+{
+  import ESClient.client
+  import org.elasticsearch.action.WriteConsistencyLevel
 
   def receive = {
-    case Server => println(Unirest.get(couch).asJson.getBody.getObject.toString(2))
-    case DBs    => println(Unirest.get(s"$couch/_all_dbs").asJson.getBody)
-    case DB(db) => println(Unirest.put(s"$couch/$db").asJson.getBody)
-    case Doc(db, doc, uuid) => 
-      //println(Unirest.post(s"$couch/$db/").body(doc).toString)
-      Unirest.post(s"$couch/$db/")
-        .header("Content-Type", "application/json")
-        .body(doc).asJson.getBody//println()
-      //Unirest.put(s"$couch/$db/$uuid").body(doc).asJson.getBody//println()
+    case Doc(id, doc) => 
+      log(id)//println(s"${self.path}: $id -> $doc")
+      sender ! Try { 
+        assert(
+          client.prepareUpdate("test", "test", id.toString)
+                .setDoc(doc).setUpsert(doc)
+                .setConsistencyLevel(WriteConsistencyLevel.ALL)
+                .execute.get.isCreated
+          ,true)
+      }
+
+    case x => println(x)
   }
 }
 
+////////////////////: Mongo ://////////////////////////
 
-import com.mongodb._
-import com.mongodb.util.JSON
+object MongoClient
+{
+  import com.mongodb.MongoClient
+  import com.mongodb.MongoCredential
+  import com.mongodb.ServerAddress
+  import org.jongo.Jongo
 
-class MongoLoader(akka: ActorSystem, val nb_clients:Int) extends Loader {
-  import MongoDBClient._
-
-  val clients = List.fill(nb_clients)(akka.actorOf(Props[MongoDBClient]))
-
-  def init: Unit = {}
-
-  def load(docs: Seq[String]) = (docs zip clients) map {
-    case (doc, client) => client ! Doc(doc)
-  }
+  val client = new Jongo(
+    new MongoClient(
+      List(new ServerAddress("localhost")),
+      List(MongoCredential.createMongoCRCredential("hub", "hub", "hub".toArray))
+  ).getDB("hub")).getCollection("test")
 }
-
-object MongoDBClient {
-  // singleton pool of connections to mongo
-  val mongo = new MongoClient("localhost", 27017)
-  val db = "load-test"
-  case class Doc(doc:String)
-}
-class MongoDBClient extends Actor {
-  import MongoDBClient._
+class MongoLoader extends Actor with Logger
+{
+  import MongoClient.client
 
   def receive = {
-    case Doc(doc) => 
-      mongo.getDB(db).getCollection(db)
-        .insert(JSON.parse(doc).asInstanceOf[DBObject], WriteConcern.ACKNOWLEDGED)
+    case Doc(id, doc) => 
+      log(id)//println(s"${self.path}: $id -> $doc")
+      sender ! Try { 
+        client.update("{_id:#}", id.toString).upsert.`with`(doc) 
+      }
+
+    case x => println(x)
   }
 }
+

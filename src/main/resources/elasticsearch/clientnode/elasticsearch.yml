@@ -1,0 +1,4 @@
+#script.engine.groovy.inline.update: on
+#node.data: false
+#node.master: false
+node.client: true

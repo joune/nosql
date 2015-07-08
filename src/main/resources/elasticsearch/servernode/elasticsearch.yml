@@ -1,0 +1,4 @@
+script.engine.groovy.inline.update: on
+node.data: true
+node.master: true
+cluster.routing.allocation.disk.threshold_enabled: false
