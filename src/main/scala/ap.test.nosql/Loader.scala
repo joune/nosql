@@ -9,6 +9,7 @@ import concurrent.Future
 import concurrent.duration._
 import util._
 import collection.JavaConversions._
+import scala.io.Source
 
 object Loader
 {
@@ -24,7 +25,12 @@ object Main extends App
   val payload = "a"*payloadSize
 
   val system = ActorSystem("loader")
-  val loader = system.actorOf(Props[ESLoader]
+  val loaderProps = Option(System.getProperty("loader")).getOrElse("cassandra") match {
+    case "cassandra" => Props[CassandraLoader]
+    case "elasticsearch" => Props[ESLoader]
+    case "mongo" => Props[MongoLoader]
+  }
+  val loader = system.actorOf(loaderProps
                       .withRouter(SmallestMailboxPool(nrOfInstances = nbPar)))
 
   import system.dispatcher
@@ -32,7 +38,7 @@ object Main extends App
 
   // launch requests
   val results:Stream[Future[Try[_]]] = 
-    (1 to nbMsg).toStream map { id =>
+    Stream.from(1).take(nbMsg) map { id =>
       (loader ? Doc(id, s"""{"i":$id, "d":"$payload"}""")).mapTo[Try[_]]
     }
 
@@ -79,6 +85,52 @@ class FakeLoader extends Actor with Logger
   }
 }
 
+////////////////////: Cassandra ://////////////////////////
+
+object CassandraClient
+{
+  import com.datastax.driver.core.{Cluster, Session}
+  import scala.collection.JavaConversions._
+
+  val cluster = {
+    val b = Cluster.builder
+    //locate contact points IPs with docker
+    Stream.from(1).map { i => 
+        exec("docker","inspect","--format='{{ .NetworkSettings.IPAddress }}'",s"cassandra$i")
+      }.takeWhile(_._1 == 0).map(_._2.mkString).foreach { ip =>
+        println(s"addContactPoint $ip")
+        b.addContactPoint(ip)
+      }
+    b.build
+  }
+  val session = cluster.connect
+  // test connection by creating the keyspace (or check it exists)
+  session.execute("drop table if exists test");
+  session.execute("create table if not exists test with replication = {'class':'SimpleStrategy', 'replication_factor':3};");
+  // enter the application keyspace, so that we don't need to repeat it everywhere
+  session.execute("use test");
+  session.execute("create table if not exists test (id int primary key, v text)")
+
+  def exec(prog: String*) :(Int,Iterator[String]) = {
+    val p = new ProcessBuilder(prog).redirectErrorStream(true).start
+    (p.waitFor, Source.fromInputStream(p.getInputStream).getLines)
+  }
+}
+class CassandraLoader extends Actor with Logger
+{
+  import CassandraClient._
+
+  def receive = {
+    case Doc(id, doc) => 
+      log(id)//println(s"${self.path}: $id -> $doc")
+      sender ! Try { 
+        assert(
+          session.execute("update test set v=? where id=?", doc, id.asInstanceOf[Integer]).wasApplied
+          ,true)
+      }
+  }
+}
+
 ////////////////////: Elastic ://////////////////////////
 
 object ESClient
@@ -116,14 +168,17 @@ class ESLoader extends Actor with Logger
 
 object MongoClient
 {
-  import com.mongodb.MongoClient
-  import com.mongodb.ServerAddress
+  import com.mongodb.{MongoClient, ServerAddress, WriteConcern}
   import org.jongo.Jongo
 
   val client = new Jongo(
-    new MongoClient(
-      List(new ServerAddress("localhost"))
-    ).getDB("test")).getCollection("test")
+    new MongoClient(List(
+      new ServerAddress("localhost", 27017)
+      ,new ServerAddress("localhost", 27027)
+      ,new ServerAddress("localhost", 27037)
+    )).getDB("test")).getCollection("test")
+
+  client.withWriteConcern(WriteConcern.REPLICAS_SAFE)
 }
 class MongoLoader extends Actor with Logger
 {

@@ -2,3 +2,4 @@
 #node.data: false
 #node.master: false
 node.client: true
+discovery.zen.minimum_master_nodes: 2
